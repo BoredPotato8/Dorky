@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>dorky</title><meta name="description" content="The easiest way to google dork"><style>
+* { box-sizing: border-box; }
+html { color-scheme: light; }
+body { margin: 0; background: white; color: #202020; font: 16px/1.5 system-ui, sans-serif; }
+main { width: min(760px, calc(100% - 32px)); margin: 30vh auto 48px; }
+main.searched { margin-top: 40px; }
+form { display: flex; gap: 8px; }
+input { flex: 1; min-width: 0; padding: 12px; border: 1px solid #999; border-radius: 0; background: white; color: #202020; font: inherit; }
+input:focus { outline: 2px solid #333; outline-offset: 1px; }
+input::placeholder { color: #737373; }
+button { padding: 10px 16px; border: 1px solid #999; border-radius: 0; background: #f5f5f5; color: #202020; font: inherit; cursor: pointer; }
+button:hover { background: #e8e8e8; }
+button:focus-visible, a:focus-visible, summary:focus-visible { outline: 2px solid #333; outline-offset: 3px; }
+a { color: #1749a0; text-decoration: underline; text-underline-offset: 2px; overflow-wrap: anywhere; }
+section:empty { display: none; }
+.status, .source, small { color: #666; font-size: 14px; }
+ol { padding: 0; list-style: none; }
+li { margin: 28px 0; }
+.result-title { font-size: 19px; }
+.source { margin: 4px 0; }
+li p { margin: 4px 0; }
+details { margin-top: 28px; }
+summary { cursor: pointer; color: #555; font-size: 14px; }
+details p { font: 13px/1.7 ui-monospace, monospace; }
+small { display: block; margin-top: 4px; font: 13px/1.5 system-ui, sans-serif; }
+@media (max-width: 480px) { input, button { font-size: 14px; padding: 11px 10px; } main.searched { margin-top: 24px; } }
+
+h1 { margin: 0; font-size: 24px; font-weight: 600; }
+
+.intro { margin-bottom: 20px; }
+.name-row { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+.name-row span { color: #666; font-size: 14px; }
+.topic-description { margin: 16px 0 0; color: #555; font-size: 14px; line-height: 1.7; }
+</style></head>
+<body><main><header class="intro"><div class="name-row"><h1>dorky</h1><span>The easiest way to google dork</span></div></header>
+<form id="search-form" role="search" action="https://www.google.com/search" method="get" target="_blank" rel="noopener noreferrer"><input id="query" name="q" aria-label="Search for a document" placeholder="What document are you looking for?" required minlength="2" maxlength="600" autofocus><button type="submit">Search</button></form>
+<p class="topic-description">Google dorking is a search technique that uses advanced operators to narrow results and uncover publicly indexed information. It makes searches more precise by filtering the web according to specific criteria.</p><p id="error" role="alert" aria-live="polite"></p></main>
+<script>const FORMATS = ['pdf', 'docx', 'pptx', 'xlsx', 'txt'];
+const DEFAULT_FILTERS = { formats: [], domain: '', customDomain: '', after: '', before: '', exact: '', exclude: '', depth: 'quick' };
+const quote = (value) => '"' + value.replace(/["\\<>]/g, '').trim() + '"';
+const normalizeDomain = (value) => value.toLowerCase().replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^\*\./, '');
+const unique = (values) => [...new Set(values.filter(Boolean))];
+const clean = (value) => value.replace(/\s+/g, ' ').trim();
+const escape = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const STOP = new Set('a an the of for about on in and with from to at by that which this those these some any all as is are was were be have has would could can you your i my me it its'.split(' '));
+const EXTENSIONS = { pdf: ['pdf'], docx: ['docx', 'doc'], pptx: ['pptx', 'ppt'], xlsx: ['xlsx', 'xls'], txt: ['txt'] };
+const category = (extension) => ({ doc: 'docx', ppt: 'pptx', xls: 'xlsx' }[extension] || extension);
+const KIND_GROUPS = [
+    ['study guide', 'review guide', 'revision guide'],
+    ['annual report', 'annual reports'],
+    ['research paper', 'research papers', 'research article', 'research articles'],
+    ['lecture notes', 'course notes'],
+    ['business plan', 'business plans'],
+    ['financial statement', 'financial statements'],
+    ['practice exam', 'practice test'],
+    ['final exam', 'final examination'],
+    ['question paper', 'exam paper'],
+    ['technical report', 'technical reports'],
+    ['case study', 'case studies'],
+    ['user manual', 'instruction manual', 'user guide', 'owner manual'],
+    ['white paper', 'whitepaper'],
+    ['textbook', 'textbooks'],
+    ['syllabus', 'syllabi'],
+    ['template', 'templates'],
+    ['handbook', 'handbooks'],
+    ['report', 'reports'],
+    ['slides', 'slide deck'],
+];
+const CONCEPTS = [
+    /\bAP\s+Computer\s+Science(?:\s+[AP])?\b/gi,
+    /\bAP\s+(?:Biology|Chemistry|Physics(?:\s+[12C])?|Calculus(?:\s+[AB]C)?|Statistics|Psychology|Economics|English|History|Environmental\s+Science)\b/gi,
+    /\b(?:machine learning|deep learning|climate change|artificial intelligence|natural language processing|computer science|neural networks|linear algebra|supply chain|social media|renewable energy|public health|data science|quantum computing|word embeddings|text classification)\b/gi,
+];
+function dateFromText(value, end = false) { return /^\d{4}$/.test(value) ? value + (end ? '-12-31' : '-01-01') : value; }
+function parseIntent(input) {
+    const f = input.filters;
+    const original = clean(input.query.replace(/[“”]/g, '"').replace(/[‘’]/g, "'"));
+    const manual = /(?:^|\s|\()(?:-?(?:site|filetype|ext|intitle|inurl|allintitle|allinurl|before|after):|OR\b)/.test(original);
+    const requiredPhrases = unique([...original.matchAll(/(?:^|[^\w:-])"([^"\n]+)"/g)].map(match => match[1]).concat(f.exact ? [f.exact] : []));
+    const excludedTerms = unique(f.exclude.split(',').map(clean));
+    const domains = [];
+    const excludedDomains = [];
+    let after = f.after, before = f.before;
+    const formats = [...f.formats];
+    const extensions = [];
+    const formatFamilies = [];
+    let text = original;
+    // Quoted strings remain hard constraints; don't reinterpret words inside them.
+    const protectedPhrases = [];
+    text = text.replace(/"([^"\n]+)"/g, (_, phrase) => { protectedPhrases.push(phrase); return ` QPHRASE${protectedPhrases.length - 1} `; });
+    text = text.replace(/(^|\s)-site:([^\s()]+)/gi, (_, prefix, domain) => { excludedDomains.push(normalizeDomain(domain)); return prefix; });
+    text = text.replace(/\bsite:([^\s()]+)/gi, (_, domain) => { domains.push(normalizeDomain(domain)); return ' '; });
+    text = text.replace(/\b(?:filetype|ext):(pdf|docx?|pptx?|xlsx?|txt)\b/gi, (_, extension) => { extensions.push(extension.toLowerCase()); return ' '; });
+    text = text.replace(/\b(after|before):(\d{4}(?:-\d{2}-\d{2})?)\b/gi, (_, kind, date) => { if (kind.toLowerCase() === 'after')
+        after ||= dateFromText(date);
+    else
+        before ||= dateFromText(date); return ' '; });
+    text = text.replace(/(^|\s)-(QPHRASE\d+|[\p{L}\p{N}][\p{L}\p{N}_-]*)/gu, (_, prefix, term) => { excludedTerms.push(/^QPHRASE/.test(term) ? protectedPhrases[Number(term.slice(7))] : term); return prefix; });
+    // Natural-language constraints are removed from the topic and compiled once.
+    text = text.replace(/\b(?:from|on|within|at|site|website|domain)\s+(?:the\s+)?(?:https?:\/\/)?(?:www\.)?((?:[a-z0-9-]+\.)+[a-z]{2,63})(?:\/[^\s]*)?/gi, (_, domain) => { domains.push(normalizeDomain(domain)); return ' '; });
+    text = text.replace(/\b(?:only\s+)?(?:from|on|within)\s+(?:the\s+)?\.?((?:edu|gov|org))\b(?:\s+(?:sites|domains|websites))?/gi, (_, domain) => { domains.push(domain.toLowerCase()); return ' '; });
+    text = text.replace(/\b(?:from|on)\s+(?:university|educational|government|nonprofit)\s+(?:websites|sites|domains)\b/gi, match => { domains.push(/government/i.test(match) ? 'gov' : /nonprofit/i.test(match) ? 'org' : 'edu'); return ' '; });
+    text = text.replace(/\b(?:published\s+)?(?:between|from)\s+((?:19|20)\d{2})\s+(?:and|to|through)\s+((?:19|20)\d{2})\b/gi, (_, start, end) => { after ||= `${Number(start) - 1}-12-31`; before ||= `${Number(end) + 1}-01-01`; return ' '; });
+    text = text.replace(/\b(?:published\s+)?(after|since|before)\s+(\d{4}(?:-\d{2}-\d{2})?)\b/gi, (_, kind, date) => { if (kind.toLowerCase() === 'before')
+        before ||= dateFromText(date);
+    else
+        after ||= dateFromText(date); return ' '; });
+    text = text.replace(/\b(?:without|excluding|exclude|but not)\s+(.+?)(?=\s+(?:from|on|after|before|filetype:|site:|PDFs?|DOCX?|PPTX?|XLSX?|TXT)\b|$)/gi, (_, terms) => { excludedTerms.push(...terms.split(/\s+(?:and|or)\s+|,/).map(clean).map(term => /^QPHRASE\d+$/.test(term) ? protectedPhrases[Number(term.slice(7))] : term)); return ' '; });
+    const exactExtensions = [];
+    text = text.replace(/\b(PDFs?|DOCX?|PPTX?|XLSX?|TXT)\b(?:\s+format)?/gi, (_, token) => { const extension = token.toLowerCase() === 'pdfs' ? 'pdf' : token.toLowerCase(); exactExtensions.push(extension); return ' '; });
+    for (const [pattern, format] of [
+        [/\b(?:in\s+)?(?:Microsoft\s+)?Word\s+(?:documents?|files?|format)\b|\bin\s+(?:Microsoft\s+)?Word\b|\b(?:and|or)\s+Word\s*$/gi, 'docx'],
+        [/\b(?:in\s+)?(?:Microsoft\s+)?PowerPoint(?:\s+(?:presentations?|files?|format))?\b/gi, 'pptx'],
+        [/\b(?:in\s+)?(?:Microsoft\s+)?Excel(?:\s+(?:spreadsheets?|files?|format))?\b|\bspreadsheets?\b/gi, 'xlsx'],
+        [/\b(?:plain\s+)?text\s+files?\b/gi, 'txt'],
+    ])
+        text = text.replace(pattern, () => { if (!formats.includes(format))
+            formats.push(format); formatFamilies.push(format); return ' '; });
+    if (!f.formats.length) {
+        extensions.push(...exactExtensions, ...formatFamilies.flatMap(format => EXTENSIONS[format]));
+        for (const ext of extensions)
+            if (!formats.includes(category(ext)))
+                formats.push(category(ext));
+    }
+    if (f.formats.length) {
+        formats.splice(0, formats.length, ...f.formats);
+        extensions.splice(0, extensions.length, ...f.formats.flatMap(format => EXTENSIONS[format]));
+    }
+    if (!extensions.length && formats.length)
+        extensions.push(...formats.flatMap(format => EXTENSIONS[format]));
+    const explicitFormat = formats.length > 0;
+    if (!formats.length)
+        formats.push(...FORMATS);
+    if (f.domain) {
+        domains.splice(0, domains.length, f.domain === 'custom' ? normalizeDomain(f.customDomain) : f.domain);
+    }
+    const years = unique(text.match(/\b(?:19|20)\d{2}\b/g) || []);
+    text = text.replace(/\b(?:19|20)\d{2}\b/g, ' ');
+    text = text.replace(/^(?:(?:can|could|would)\s+you\s+)?(?:please\s+)?(?:(?:i\s+(?:want|need|am looking for)|i'm looking for|looking for|find(?:\s+me)?|show(?:\s+me)?|search(?:\s+for)?|give\s+me|get\s+me)\s+)+/i, '');
+    text = text.replace(/\b(?:publicly indexed|available online|publicly available|downloadable|please|documents?|files?)\b/gi, ' ');
+    const documentTerms = [], synonyms = [];
+    for (const group of KIND_GROUPS) {
+        let found = false;
+        for (const term of group)
+            text = text.replace(new RegExp(`\\b${escape(term)}\\b`, 'gi'), match => { if (!found)
+                documentTerms.push(group[0]); found = true; return ' '; });
+        if (found)
+            synonyms.push(...group.filter(term => !documentTerms.includes(term)));
+    }
+    // A request for papers/articles describes a genre, not an extra topic word.
+    text = text.replace(/\b(?:papers?|articles?)\s*$/i, () => { if (!documentTerms.includes('research paper'))
+        documentTerms.push('research paper'); return ' '; });
+    const subjectPhrases = [];
+    for (const pattern of CONCEPTS) {
+        pattern.lastIndex = 0;
+        for (const match of text.matchAll(pattern))
+            subjectPhrases.push(match[0]);
+    }
+    // Named multiword entities are useful phrases; ordinary sentences aren't.
+    for (const match of text.matchAll(/\b[A-Z][a-zA-Z]+(?:(?:\s+(?:of|the|and|for|de|van|von))?\s+(?:[A-Z][a-zA-Z]+|[A-Z]{2,})){1,5}/g)) {
+        if (!/QPHRASE\d/.test(match[0]))
+            subjectPhrases.push(match[0]);
+    }
+    text = text.replace(/\bQPHRASE(\d+)\b/g, ' ');
+    // Preserve connecting words inside names such as Bank of America.
+    const entities = [];
+    for (const phrase of [...unique(subjectPhrases)].sort((a, b) => b.length - a.length))
+        text = text.replace(new RegExp(`\\b${escape(phrase)}\\b`, 'gi'), match => { entities.push(match); return `ENTITY${entities.length - 1}TOKEN`; });
+    const subject = clean((text.match(/[\p{L}\p{N}][\p{L}\p{N}+#'.-]*/gu) || []).filter(word => !STOP.has(word.toLowerCase()) && word !== 'OR').join(' ').replace(/ENTITY(\d+)TOKEN/g, (_, index) => entities[Number(index)]));
+    // A search containing only a kind ("annual reports") needs no invented subject.
+    return { subject, subjectPhrases: unique(subjectPhrases).filter(phrase => subject.toLowerCase().includes(phrase.toLowerCase())), documentTerms: unique(documentTerms), synonyms: unique(synonyms), requiredPhrases: requiredPhrases.filter(phrase => !excludedTerms.includes(phrase)), excludedTerms: unique(excludedTerms), domains: unique(domains), excludedDomains: unique(excludedDomains), years, after, before, formats, extensions: unique(extensions), explicitFormat, manual };
+}
+function formatClause(extensions) { return extensions.length === 1 ? `filetype:${extensions[0]}` : `(${extensions.map(ext => `filetype:${ext}`).join(' OR ')})`; }
+function renderSubject(intent, phrases = true) {
+    let subject = intent.subject;
+    for (const required of intent.requiredPhrases)
+        subject = subject.replace(new RegExp(escape(required), 'gi'), ' ');
+    // Placeholders prevent overlapping phrases from introducing nested quotes.
+    const replacements = [];
+    if (phrases)
+        for (const phrase of [...intent.subjectPhrases].sort((a, b) => b.length - a.length)) {
+            subject = subject.replace(new RegExp(`\\b${escape(phrase)}\\b`, 'gi'), match => { replacements.push(quote(match)); return `PHRASE${replacements.length - 1}TOKEN`; });
+        }
+    // An explicitly quoted phrase is compiled as a hard constraint, exactly once.
+    for (const required of intent.requiredPhrases)
+        subject = subject.replace(new RegExp(escape(required), 'gi'), ' ');
+    return clean(subject.replace(/PHRASE(\d+)TOKEN/g, (_, index) => replacements[Number(index)]));
+}
+function generatePlan(input, enhancement) {
+    const intent = parseIntent(input);
+    const acceptedPhrases = (enhancement?.subjectPhrases || []).filter(phrase => phrase.length <= 80 && intent.subject.toLowerCase().includes(phrase.toLowerCase()));
+    intent.subjectPhrases = unique([...intent.subjectPhrases, ...acceptedPhrases]);
+    const queries = [], reasons = [];
+    const add = (query, reason) => { query = clean(query); if (query && !queries.includes(query)) {
+        queries.push(query);
+        reasons.push(reason);
+    } };
+    const domainClause = intent.domains.length > 1 ? `(${intent.domains.map(domain => `site:${domain}`).join(' OR ')})` : intent.domains.map(domain => `site:${domain}`).join(' ');
+    const constraints = [
+        ...intent.requiredPhrases.map(quote), domainClause,
+        ...intent.excludedDomains.map(domain => `-site:${domain}`),
+        ...intent.excludedTerms.map(term => '-' + (/\s/.test(term) ? quote(term) : term)),
+        intent.after ? `after:${intent.after}` : '', intent.before ? `before:${intent.before}` : '',
+    ].filter(Boolean);
+    const allExtensions = FORMATS.flatMap(format => EXTENSIONS[format]);
+    const primaryExtensions = intent.explicitFormat ? intent.extensions : /\bslides\b/i.test(intent.documentTerms.join(' ')) ? ['pdf', 'pptx', 'ppt'] : ['pdf'];
+    const subject = renderSubject(intent), looseSubject = renderSubject(intent, false);
+    const terms = intent.documentTerms.map(term => /\s/.test(term) ? quote(term) : term);
+    function compile(parts, extensions = primaryExtensions) { return [...parts.filter(Boolean), ...intent.years, ...constraints, formatClause(extensions)].join(' '); }
+    if (intent.manual) {
+        // Respect hand-written dorks verbatim. No guessed replacements or AND-added synonyms.
+        const hasFormat = /\b(?:filetype|ext):/i.test(input.query);
+        const extra = [input.filters.exact ? quote(input.filters.exact) : '', input.filters.after ? `after:${input.filters.after}` : '', input.filters.before ? `before:${input.filters.before}` : '', input.filters.domain ? domainClause : '', ...input.filters.exclude.split(',').map(clean).filter(Boolean).map(term => '-' + quote(term)), input.filters.formats.length ? formatClause(primaryExtensions) : ''].filter(Boolean);
+        const original = clean(input.query.replace(/[“”]/g, '"'));
+        add([extra.length || !hasFormat ? `(${original})` : original, ...extra, !hasFormat && !input.filters.formats.length ? formatClause(primaryExtensions) : ''].filter(Boolean).join(' '), 'Your explicit search operators, preserved.');
+    }
+    else {
+        const baseTerms = terms.filter(term => !/research paper/.test(term) && !(intent.documentTerms.includes('study guide') && /final exam|final examination/.test(term)));
+        add(compile([subject, ...baseTerms]), 'Keep the subject, year, and primary document purpose together.');
+        // Use OR for equivalent document names, replacing the original kind rather than adding to it.
+        const primaryKind = intent.documentTerms[0];
+        const group = primaryKind ? KIND_GROUPS.find(group => group.includes(primaryKind)) : undefined;
+        const alternatives = group?.filter(term => term !== primaryKind && term.replace(/s$/, '') !== primaryKind.replace(/s$/, '')) || [];
+        if (primaryKind && alternatives.length) {
+            const kindAlternatives = `(${[primaryKind, ...alternatives.slice(0, 2)].map(quote).join(' OR ')})`;
+            add(compile([subject, kindAlternatives, ...terms.slice(1)]), 'Try equivalent document names without requiring all of them.');
+        }
+        if (subject && (intent.documentTerms.length || intent.subjectPhrases.length)) {
+            const target = primaryKind || intent.subjectPhrases[0];
+            const focusedSubject = primaryKind ? subject : clean(subject.replace(quote(target), '').replace(target, ''));
+            add(compile([focusedSubject, `intitle:${quote(target)}`, ...terms.filter(term => term !== quote(target) && term !== target)]), 'Look for the document purpose in its title.');
+        }
+        if (looseSubject !== subject)
+            add(compile([looseSubject, ...terms]), 'Allow different wording and spacing in the topic.');
+        if (intent.documentTerms.length > 1) {
+            add(compile([subject, terms[0]]), 'Broaden secondary document descriptors while preserving the topic and explicit constraints.');
+        }
+        // AI alternatives replace the subject in a later query; they are never AND-added.
+        for (const alternative of (enhancement?.alternatives || []).slice(0, 2)) {
+            const anchors = unique([...intent.subjectPhrases, ...intent.subject.split(/\s+/).filter(word => /^[A-Z][a-z]+$|^[A-Z]{2,}$/.test(word))]);
+            if (alternative && anchors.every(anchor => alternative.toLowerCase().includes(anchor.toLowerCase())) && alternative.length <= 120 && !/[:"<>]|\b(?:OR|AND)\b/.test(alternative))
+                add(compile([alternative, ...terms]), 'Try an AI-suggested rephrasing of the same topic.');
+        }
+        if (!intent.explicitFormat)
+            add(compile([looseSubject || subject, ...terms], allExtensions), 'Include Word, slides, spreadsheets, and text files as well as PDFs.');
+        if (queries.length === 1 && subject)
+            add(compile([`intitle:${quote(subject)}`, ...terms]), 'Focus on documents with the subject in their title.');
+    }
+    // Simple requests need fewer searches. Never pad the plan with arbitrary keywords.
+    const cap = { quick: 5, deep: 7, extensive: 9 }[input.filters.depth];
+    return { queries: queries.slice(0, cap), reasons: reasons.slice(0, cap), keywords: unique((intent.subject + ' ' + intent.requiredPhrases.join(' ') + ' ' + intent.documentTerms.join(' ')).split(/\s+/).filter(Boolean)), years: intent.years, formats: intent.formats, planner: enhancement && (acceptedPhrases.length || enhancement.alternatives.length) ? 'ai' : 'smart', intent };
+}
+
+
+const form=document.getElementById('search-form');
+const input=document.getElementById('query');
+const error=document.getElementById('error');
+form.addEventListener('submit',function(event){
+ event.preventDefault();error.textContent='';
+ const query=input.value.trim();
+ if(query.length<2||query.length>600){error.textContent='Enter between 2 and 600 characters.';return;}
+ const request={query,filters:{...DEFAULT_FILTERS}};
+ const intent=parseIntent(request);
+ const validDate=value=>!value||(Number.isFinite(Date.parse(value))&&new Date(value).toISOString().slice(0,10)===value);
+ if(!validDate(intent.after)||!validDate(intent.before)||(intent.after&&intent.before&&intent.after>=intent.before)){error.textContent='Enter a valid publication date range.';return;}
+ const url=new URL('https://www.google.com/search');
+ url.searchParams.set('q',generatePlan(request).queries[0]);
+ window.open(url.toString(),'_blank','noopener,noreferrer');
+});
+</script></body></html>
